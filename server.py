@@ -1,7 +1,5 @@
 import os
 import logging
-from fastapi import FastAPI, Header, HTTPException, Request
-from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
@@ -15,8 +13,6 @@ logger = logging.getLogger(__name__)
 memory_manager = MemoryManager()
 users_manager = UserManager()
 
-# FastMCP creates its own Starlette app for SSE. 
-# We'll just define the FastMCP instance, then attach our REST routes directly to its underlying Starlette app!
 mcp = FastMCP("AgentMemory")
 
 def get_token_from_ctx(ctx: Context) -> str:
@@ -66,18 +62,11 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-# --- REST API Endpoints attached to FastMCP's internal app ---
-
 if __name__ == "__main__":
-    # If run natively (e.g. from CLI without Starlette), run handles stdio by default.
-    # Cloud run invokes `python server.py`, so we need to run SSE.
+    import uvicorn
     port = int(os.getenv("PORT", "8080"))
-    
-    # We can start FastMCP in SSE mode. 
-    # But wait, how do we add REST routes? FastMCP doesn't cleanly expose an add_route function in all versions.
-    # Let's bypass creating custom REST endpoints inside the FastMCP server process.
-    # Cloud Run deployments for MCP generally JUST serve MCP SSE. 
-    # Our `cli.py` can just use MCP internally, or we can use a FastMCP.get_asgi_app() workaround if it exists.
-    
-    logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    logger.info(f"Starting AgentMemory SSE MCP server natively with uvicorn on port {port}")
+    # In older versions of FastMCP, to get the raw app to bind to a specific port on Cloud Run cleanly:
+    mcp.settings.port = port
+    mcp.settings.host = "0.0.0.0"
+    mcp.run("sse")
