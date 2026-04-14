@@ -1,9 +1,12 @@
 import os
 import logging
+from fastapi import FastAPI, Header, HTTPException, Request
+from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
 from dotenv import load_dotenv
+import uvicorn
 
 load_dotenv()
 
@@ -66,20 +69,9 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
     logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
     
-    # GCP Cloud Run throws 421 Invalid Host Header if we use default fastmcp SSE backend which has Starlette
-    # TrustedHostMiddleware with ["*"] as a string not a list or something similar inside their internal implementation.
-    # To cleanly bypass this inside of FastMCP's internal structure:
+    # GCP Cloud Run needs this so Starlette doesn't throw 'Invalid Host header'
     mcp.settings.port = port
     mcp.settings.host = "0.0.0.0"
-    
-    import starlette.middleware.trustedhost
-    
-    # Hack the module so TrustedHostMiddleware ALWAYS accepts the host
-    starlette.middleware.trustedhost.TrustedHostMiddleware = type(
-        "TrustedHostMiddleware",
-        (object,),
-        {"__init__": lambda self, app, allowed_hosts=None: setattr(self, "app", app),
-         "__call__": lambda self, scope, receive, send: self.app(scope, receive, send)}
-    )
+    mcp.settings.allow_hosts = ["*"] # Allow wildcard host header in Starlette
     
     mcp.run("sse")
