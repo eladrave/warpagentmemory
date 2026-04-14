@@ -1,12 +1,9 @@
 import os
 import logging
-from fastapi import FastAPI, Header, HTTPException, Request
-from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
 from dotenv import load_dotenv
-import uvicorn
 
 load_dotenv()
 
@@ -67,11 +64,19 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
-    logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
+    logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
     
-    # GCP Cloud Run needs this so Starlette doesn't throw 'Invalid Host header'
-    mcp.settings.port = port
-    mcp.settings.host = "0.0.0.0"
-    mcp.settings.allow_hosts = ["*"] # Allow wildcard host header in Starlette
+    import starlette.middleware.trustedhost
     
-    mcp.run("sse")
+    # GCP Cloud Run fix for Invalid Host Header
+    starlette.middleware.trustedhost.TrustedHostMiddleware = type(
+        "TrustedHostMiddleware",
+        (object,),
+        {"__init__": lambda self, app, allowed_hosts=None: setattr(self, "app", app),
+         "__call__": lambda self, scope, receive, send: self.app(scope, receive, send)}
+    )
+    
+    import uvicorn
+    # mcp.sse_app is the factory for Starlette
+    app = mcp.sse_app()
+    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
