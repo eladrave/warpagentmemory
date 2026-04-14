@@ -5,17 +5,21 @@ import datetime
 import threading
 from typing import Dict, List
 from apscheduler.schedulers.background import BackgroundScheduler
-from drive_api import DriveClient
 from gemini_api import GeminiClient
 from users import UserManager
 
 logger = logging.getLogger(__name__)
 
+# Default to a local directory if not running in Cloud Run
+STORAGE_DIR = os.getenv("STORAGE_DIR", os.path.join(os.getcwd(), "gcs_mount"))
+
 class MemoryManager:
     def __init__(self):
-        self.drive = DriveClient()
         self.gemini = GeminiClient()
         self.users = UserManager()
+        
+        # Ensure base storage directory exists
+        os.makedirs(STORAGE_DIR, exist_ok=True)
         
         # token -> list of memories
         self.local_buffer: Dict[str, List[str]] = {}
@@ -30,6 +34,12 @@ class MemoryManager:
         
     def _get_today_filename(self) -> str:
         return f"memory_{datetime.datetime.now().strftime('%Y-%m-%d')}.md"
+        
+    def _get_user_dir(self, user_email: str) -> str:
+        # Create user-specific directory in GCS mount
+        user_dir = os.path.join(STORAGE_DIR, user_email)
+        os.makedirs(user_dir, exist_ok=True)
+        return user_dir
 
     def add_memory(self, token: str, memory_text: str):
         timestamp = datetime.datetime.now().strftime("[%H:%M:%S]")
@@ -61,22 +71,20 @@ class MemoryManager:
                 continue
                 
             user_email = user_info["email"]
-            content_to_flush = "\n".join(memories)
+            content_to_flush = "\n".join(memories) + "\n"
             
             try:
-                # 1. Append to Google Drive (folder discovery handled by Drive API)
-                self.drive.append_to_file(user_email, today_file, content_to_flush)
+                # 1. Append to local file (GCS bucket mount)
+                user_dir = self._get_user_dir(user_email)
+                file_path = os.path.join(user_dir, today_file)
+                
+                with open(file_path, "a", encoding="utf-8") as f:
+                    f.write(content_to_flush)
                 
                 # 2. Trigger Gemini Update
-                full_content = self.drive.read_file(user_email, today_file)
-                tmp_path = f"/tmp/{today_file}_{user_email}"
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    f.write(full_content)
-                    
                 store_display_name = f"AgentMemory_{user_email}"
-                self.gemini.store_name_cache = None # Clear cache to ensure we get the right user's store
+                self.gemini.store_name_cache = None # Clear cache
                 
-                # Override the store name explicitly for this user
                 def _get_store():
                     for s in self.gemini.client.file_search_stores.list():
                         if s.display_name == store_display_name:
@@ -92,10 +100,10 @@ class MemoryManager:
                     if getattr(doc, 'display_name', '') == today_file:
                         self.gemini.client.file_search_stores.documents.delete(name=doc.name, config={'force': True})
                     
-                logger.info(f"Uploading {tmp_path} to Gemini store {store_name} as {today_file}...")
+                logger.info(f"Uploading {file_path} to Gemini store {store_name} as {today_file}...")
                 op = self.gemini.client.file_search_stores.upload_to_file_search_store(
                     file_search_store_name=store_name,
-                    file=tmp_path,
+                    file=file_path,
                     config={'display_name': today_file}
                 )
                 
@@ -116,7 +124,7 @@ class MemoryManager:
                 with self.buffer_lock:
                     if token not in self.local_buffer:
                         self.local_buffer[token] = []
-                    self.local_buffer[token] = content_to_flush.split("\n") + self.local_buffer[token]
+                    self.local_buffer[token] = memories + self.local_buffer[token]
 
     def search_memory(self, token: str, query: str) -> str:
         user_info = self.users.get_user_by_token(token)
@@ -167,12 +175,29 @@ class MemoryManager:
         logger.info(f"Dreaming for {user_email}...")
         
         try:
-            generic_mem = self.drive.read_file(user_email, "generic_memory.md")
+            user_dir = self._get_user_dir(user_email)
+            generic_mem_path = os.path.join(user_dir, "generic_memory.md")
+            
+            generic_mem = ""
+            if os.path.exists(generic_mem_path):
+                with open(generic_mem_path, "r", encoding="utf-8") as f:
+                    generic_mem = f.read()
+                    
             today = datetime.datetime.now()
             yesterday = today - datetime.timedelta(days=1)
             
-            today_mem = self.drive.read_file(user_email, f"memory_{today.strftime('%Y-%m-%d')}.md")
-            yesterday_mem = self.drive.read_file(user_email, f"memory_{yesterday.strftime('%Y-%m-%d')}.md")
+            today_mem_path = os.path.join(user_dir, f"memory_{today.strftime('%Y-%m-%d')}.md")
+            yesterday_mem_path = os.path.join(user_dir, f"memory_{yesterday.strftime('%Y-%m-%d')}.md")
+            
+            today_mem = ""
+            if os.path.exists(today_mem_path):
+                with open(today_mem_path, "r", encoding="utf-8") as f:
+                    today_mem = f.read()
+                    
+            yesterday_mem = ""
+            if os.path.exists(yesterday_mem_path):
+                with open(yesterday_mem_path, "r", encoding="utf-8") as f:
+                    yesterday_mem = f.read()
             
             if not today_mem and not yesterday_mem:
                 logger.info(f"No recent memories to dream about for {user_email}.")
@@ -201,10 +226,7 @@ class MemoryManager:
             if new_generic_mem.endswith("```"):
                 new_generic_mem = new_generic_mem[:-3]
                 
-            self.drive.update_file_exact(user_email, "generic_memory.md", new_generic_mem.strip())
-            
-            tmp_path = f"/tmp/generic_memory_{user_email}.md"
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with open(generic_mem_path, "w", encoding="utf-8") as f:
                 f.write(new_generic_mem.strip())
                 
             store_display_name = f"AgentMemory_{user_email}"
@@ -224,7 +246,7 @@ class MemoryManager:
                     
             op = self.gemini.client.file_search_stores.upload_to_file_search_store(
                 file_search_store_name=store_name,
-                file=tmp_path,
+                file=generic_mem_path,
                 config={'display_name': "generic_memory.md"}
             )
             
@@ -241,16 +263,8 @@ class MemoryManager:
         user_email = user_info["email"]
         logger.info(f"Forcing full sync of all memories for {user_email}...")
         
-        try:
-            folder_id = self.drive.get_user_folder_id(user_email)
-        except Exception as e:
-            logger.error(f"Failed to find folder for {user_email}: {e}")
-            return
-            
-        query = f"'{folder_id}' in parents and trashed=false"
-        request = self.drive.service.files().list(q=query, spaces='drive', fields='files(id, name)')
-        results = self.drive._execute_with_retry(request)
-        files = results.get('files', [])
+        user_dir = self._get_user_dir(user_email)
+        files = [f for f in os.listdir(user_dir) if f.endswith('.md')]
         
         store_display_name = f"AgentMemory_{user_email}"
         
@@ -265,18 +279,13 @@ class MemoryManager:
         store = self.gemini.client.file_search_stores.create(config={'display_name': store_display_name})
         store_name = store.name
         
-        for f in files:
-            name = f.get('name')
-            if name.endswith('.md'):
-                content = self.drive.read_file(user_email, name)
-                tmp_path = f"/tmp/{name}_{user_email}"
-                with open(tmp_path, "w", encoding="utf-8") as tmp_f:
-                    tmp_f.write(content)
-                logger.info(f"Uploading {name} to {store_name}...")
-                self.gemini.client.file_search_stores.upload_to_file_search_store(
-                    file_search_store_name=store_name,
-                    file=tmp_path,
-                    config={'display_name': name}
-                )
+        for name in files:
+            file_path = os.path.join(user_dir, name)
+            logger.info(f"Uploading {name} to {store_name}...")
+            self.gemini.client.file_search_stores.upload_to_file_search_store(
+                file_search_store_name=store_name,
+                file=file_path,
+                config={'display_name': name}
+            )
                 
         logger.info(f"Full sync completed for {user_email}.")
