@@ -33,7 +33,7 @@ class MemoryManager:
         self.scheduler.start()
         
     def _get_today_filename(self) -> str:
-        return f"memory_{datetime.datetime.now().strftime('%Y-%m-%d')}.md"
+        return f"memory_{datetime.datetime.now().strftime('%Y-%m-%d')}.txt"
         
     def _get_user_dir(self, user_email: str) -> str:
         # Create user-specific directory in GCS mount
@@ -107,6 +107,7 @@ class MemoryManager:
                     config={'display_name': today_file}
                 )
                 
+                # We need to let it index properly without blocking too tightly
                 retries = 0
                 while not op.done and retries < 10:
                     try:
@@ -116,6 +117,7 @@ class MemoryManager:
                     time.sleep(3)
                     retries += 1
                 
+                # Make sure the actual document exists before moving on, else it might not be available yet
                 logger.info(f"Successfully flushed for {user_email}")
                 
             except Exception as e:
@@ -137,6 +139,15 @@ class MemoryManager:
         with self.buffer_lock:
             context = "\n".join(self.local_buffer.get(token, []))
             
+        # We should also read today's file to append to context, just in case the document is still indexing
+        # Gemini takes a minute to index, so if we rely on the file store immediately after a restart, it might fail.
+        user_dir = self._get_user_dir(user_email)
+        today_file = self._get_today_filename()
+        today_file_path = os.path.join(user_dir, today_file)
+        if os.path.exists(today_file_path):
+            with open(today_file_path, "r", encoding="utf-8") as f:
+                context = f.read() + "\n" + context
+            
         store_name = None
         for s in self.gemini.client.file_search_stores.list():
             if s.display_name == store_display_name:
@@ -149,7 +160,7 @@ class MemoryManager:
         sys_inst = (
             "You are an AI memory retrieval system. You will be asked questions about the user's past actions, preferences, and details. "
             "Use the provided RAG files to answer. Be concise and accurate. "
-            f"Here is today's raw memory data not yet indexed (use it if relevant!): \n{context}\n"
+            f"Here is today's raw memory data not yet fully indexed (use it to answer!): \n{context}\n"
         )
         
         from google.genai import types
@@ -176,7 +187,7 @@ class MemoryManager:
         
         try:
             user_dir = self._get_user_dir(user_email)
-            generic_mem_path = os.path.join(user_dir, "generic_memory.md")
+            generic_mem_path = os.path.join(user_dir, "generic_memory.txt")
             
             generic_mem = ""
             if os.path.exists(generic_mem_path):
@@ -186,8 +197,8 @@ class MemoryManager:
             today = datetime.datetime.now()
             yesterday = today - datetime.timedelta(days=1)
             
-            today_mem_path = os.path.join(user_dir, f"memory_{today.strftime('%Y-%m-%d')}.md")
-            yesterday_mem_path = os.path.join(user_dir, f"memory_{yesterday.strftime('%Y-%m-%d')}.md")
+            today_mem_path = os.path.join(user_dir, f"memory_{today.strftime('%Y-%m-%d')}.txt")
+            yesterday_mem_path = os.path.join(user_dir, f"memory_{yesterday.strftime('%Y-%m-%d')}.txt")
             
             today_mem = ""
             if os.path.exists(today_mem_path):
@@ -204,12 +215,12 @@ class MemoryManager:
                 return
                 
             prompt = (
-                "You are tasked with summarizing recent AI agent memories into a master generic_memory.md file.\n"
+                "You are tasked with summarizing recent AI agent memories into a master generic_memory.txt file.\n"
                 "Extract any permanent user preferences, facts, or important instructions from the recent memories and merge them into the master file.\n"
                 "Keep the master file concise, organized by category, and drop irrelevant daily details.\n"
                 f"CURRENT MASTER GENERIC MEMORY:\n{generic_mem}\n\n"
                 f"RECENT MEMORIES:\n{yesterday_mem}\n{today_mem}\n\n"
-                "Output ONLY the new raw markdown for the generic_memory.md file."
+                "Output ONLY the new raw markdown for the generic_memory.txt file."
             )
             
             model = os.getenv("DREAMING_MODEL", "gemini-2.5-flash")
@@ -221,6 +232,8 @@ class MemoryManager:
             new_generic_mem = response.text
             if new_generic_mem.startswith("```markdown"):
                 new_generic_mem = new_generic_mem[11:]
+            if new_generic_mem.startswith("```txt"):
+                new_generic_mem = new_generic_mem[6:]
             if new_generic_mem.startswith("```"):
                 new_generic_mem = new_generic_mem[3:]
             if new_generic_mem.endswith("```"):
@@ -241,13 +254,13 @@ class MemoryManager:
                 
             docs = list(self.gemini.client.file_search_stores.documents.list(parent=store_name))
             for doc in docs:
-                if getattr(doc, 'display_name', '') == "generic_memory.md":
+                if getattr(doc, 'display_name', '') == "generic_memory.txt":
                     self.gemini.client.file_search_stores.documents.delete(name=doc.name, config={'force': True})
                     
             op = self.gemini.client.file_search_stores.upload_to_file_search_store(
                 file_search_store_name=store_name,
                 file=generic_mem_path,
-                config={'display_name': "generic_memory.md"}
+                config={'display_name': "generic_memory.txt"}
             )
             
             logger.info(f"Dreaming process completed successfully for {user_email}.")
@@ -264,7 +277,7 @@ class MemoryManager:
         logger.info(f"Forcing full sync of all memories for {user_email}...")
         
         user_dir = self._get_user_dir(user_email)
-        files = [f for f in os.listdir(user_dir) if f.endswith('.md')]
+        files = [f for f in os.listdir(user_dir) if f.endswith('.txt')]
         
         store_display_name = f"AgentMemory_{user_email}"
         

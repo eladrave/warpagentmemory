@@ -1,7 +1,5 @@
 import os
 import logging
-import asyncio
-from fastapi import FastAPI, Depends, Request
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from dotenv import load_dotenv
@@ -11,39 +9,32 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="AgentMemory MCP Server")
-
 memory_manager = MemoryManager()
 
-# Instead of passing `Context` which FastMCP strips or fails on depending on version,
-# we intercept requests before FastMCP and extract the token into the FastMCP session's state/context if possible,
-# OR we use HTTP headers. FastMCP tools receive Context, which has `request_context`.
+# Let FastMCP handle the server fully.
+# We will use stdio by default, but FastMCP supports SSE automatically.
 mcp = FastMCP("AgentMemory")
 
 def get_token_from_ctx(ctx: Context) -> str:
     try:
-        # In recent FastMCP versions, Context.request_context is available.
-        # This is populated by Starlette/FastAPI underneath.
-        req = getattr(ctx.request_context, "request", None)
-        if not req:
-            raise ValueError("No request object found in context.")
-            
-        auth_header = req.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            return auth_header.split(" ")[1]
-            
-        token_query = req.query_params.get("token")
-        if token_query:
-            return token_query
-            
-        raise ValueError("Missing Authorization Bearer token or ?token= query parameter.")
-    except Exception as e:
-        logger.error(f"Failed to get token: {e}")
-        # As a fallback for local testing without proper auth injection:
-        test_token = os.getenv("TEST_TOKEN")
-        if test_token:
-            return test_token
-        raise ValueError("No valid token provided.")
+        # In typical mcp setups, the query parameter or header might be injected into request_context
+        if hasattr(ctx, "request_context") and ctx.request_context:
+            req = getattr(ctx.request_context, "request", None)
+            if req:
+                auth_header = req.headers.get("Authorization")
+                if auth_header and auth_header.startswith("Bearer "):
+                    return auth_header.split(" ")[1]
+                token_query = req.query_params.get("token")
+                if token_query:
+                    return token_query
+    except Exception:
+        pass
+        
+    # As a fallback for stdio/local testing without proper auth injection:
+    test_token = os.getenv("TEST_TOKEN")
+    if test_token:
+        return test_token
+    raise ValueError("Missing Authorization Bearer token or ?token= query parameter.")
 
 @mcp.tool()
 def add_memory(thingToRemember: str, ctx: Context) -> str:
@@ -71,10 +62,7 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-app.mount("/mcp", mcp.get_asgi_app())
-
 if __name__ == "__main__":
-    import uvicorn
+    # Start the FastMCP server, allowing it to determine transport (stdio vs SSE)
     port = int(os.getenv("PORT", "8000"))
-    logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    mcp.run()
