@@ -67,23 +67,37 @@ if __name__ == "__main__":
     logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
     
     import sys
-    app = mcp.sse_app()
-    
-    # FastMCP uses Starlette, which uses TrustedHostMiddleware with ["*"]. However,
-    # GCP strips or alters host headers sometimes. The foolproof way is to clear Starlette's middleware stack.
-    # The ASGI spec says the app is just an async callable. We can just wrap it in our own dumb ASGI wrapper 
-    # to scrub the Host header before it reaches Starlette's validation!
-    
-    async def host_scrubber_asgi(scope, receive, send):
-        if scope["type"] == "http":
-            new_headers = []
-            for name, value in scope.get("headers", []):
-                if name == b"host":
-                    new_headers.append((b"host", b"localhost")) # Force valid host for starlette
-                else:
-                    new_headers.append((name, value))
-            scope["headers"] = new_headers
-        await app(scope, receive, send)
+    app = None
+    try:
+        # In the exact version installed, sse_app() returns the underlying Starlette app
+        app = mcp.sse_app()
+    except Exception as e:
+        pass
+            
+    if app:
+        import uvicorn
+        
+        # Override the Starlette trusted host middleware which rejects GCP Load Balancer host headers
+        for idx, mw in enumerate(app.user_middleware):
+            if "TrustedHostMiddleware" in str(mw.cls):
+                app.user_middleware.pop(idx)
+        app.middleware_stack = app.build_middleware_stack()
+        
+        async def asgi_wrapper(scope, receive, send):
+            if scope["type"] == "http":
+                new_headers = []
+                for k, v in scope.get("headers", []):
+                    if k == b"host":
+                        # Strip standard host to prevent Starlette issues
+                        new_headers.append((b"host", b"localhost"))
+                    else:
+                        new_headers.append((k, v))
+                scope["headers"] = new_headers
+            await app(scope, receive, send)
 
-    import uvicorn
-    uvicorn.run(host_scrubber_asgi, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+        uvicorn.run(asgi_wrapper, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+    else:
+        # GCP Cloud Run needs this so Starlette doesn't throw 'Invalid Host header'
+        mcp.settings.port = port
+        mcp.settings.host = "0.0.0.0"
+        mcp.run("sse")
