@@ -27,7 +27,7 @@ pip install -r requirements.txt
 
 ### 2. User Registration
 For a user to use this service, they must:
-1. Create a folder in their personal Google Drive named exactly `AgentMemory`.
+1. Create a folder in their personal Google Drive 
 2. Share that folder with "Editor" permissions to the Service Account email.
 3. The Admin runs the register command:
 ```bash
