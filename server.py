@@ -66,25 +66,18 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
     logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
     
-    import sys
-    from mcp.server.fastmcp.server import create_starlette_app
-    app = create_starlette_app(mcp)
-    
     # FastMCP uses Starlette, which uses TrustedHostMiddleware with ["*"]. However,
-    # GCP strips or alters host headers sometimes. The foolproof way is to clear Starlette's middleware stack.
-    # The ASGI spec says the app is just an async callable. We can just wrap it in our own dumb ASGI wrapper 
-    # to scrub the Host header before it reaches Starlette's validation!
+    # GCP strips or alters host headers sometimes, causing `421 Invalid Host Header`.
+    # Let's bypass this by patching it right before run:
+    import starlette.middleware.trustedhost
+    starlette.middleware.trustedhost.TrustedHostMiddleware = type(
+        "TrustedHostMiddleware",
+        (object,),
+        {"__init__": lambda self, app, allowed_hosts=None: setattr(self, "app", app),
+         "__call__": lambda self, scope, receive, send: self.app(scope, receive, send)}
+    )
     
-    async def host_scrubber_asgi(scope, receive, send):
-        if scope["type"] == "http":
-            new_headers = []
-            for name, value in scope.get("headers", []):
-                if name == b"host":
-                    new_headers.append((b"host", b"localhost")) # Force valid host for starlette
-                else:
-                    new_headers.append((name, value))
-            scope["headers"] = new_headers
-        await app(scope, receive, send)
-
-    import uvicorn
-    uvicorn.run(host_scrubber_asgi, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+    # GCP needs 0.0.0.0
+    mcp.settings.port = port
+    mcp.settings.host = "0.0.0.0"
+    mcp.run("sse")
