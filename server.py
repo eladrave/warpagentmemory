@@ -66,9 +66,14 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
     logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
     
-    import starlette.middleware.trustedhost
+    # GCP Cloud Run needs this so Starlette doesn't throw 'Invalid Host header'
+    mcp.settings.port = port
+    mcp.settings.host = "0.0.0.0"
     
-    # GCP Cloud Run fix for Invalid Host Header
+    import starlette.middleware.trustedhost
+    import uvicorn
+    
+    # Hack the module so TrustedHostMiddleware ALWAYS accepts the host
     starlette.middleware.trustedhost.TrustedHostMiddleware = type(
         "TrustedHostMiddleware",
         (object,),
@@ -76,7 +81,5 @@ if __name__ == "__main__":
          "__call__": lambda self, scope, receive, send: self.app(scope, receive, send)}
     )
     
-    import uvicorn
-    # mcp.sse_app is the factory for Starlette
-    app = mcp.sse_app()
-    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+    # We must use mcp.run() because earlier we hit an ImportError trying to import create_starlette_app directly
+    mcp.run("sse")
