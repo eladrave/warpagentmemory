@@ -43,8 +43,8 @@ class DriveClient:
         if user_email in self.folder_id_cache:
             return self.folder_id_cache[user_email]
 
-        # Auto-discover folder named "AgentMemory" shared by the user
-        query = "name='AgentMemory' and mimeType='application/vnd.google-apps.folder' and trashed=false and sharedWithMe=true"
+        # Find any folder shared by the user with the service account
+        query = "mimeType='application/vnd.google-apps.folder' and trashed=false and sharedWithMe=true"
         request = self.service.files().list(q=query, spaces='drive', fields='files(id, name, owners)')
         results = self._execute_with_retry(request)
         files = results.get('files', [])
@@ -54,10 +54,11 @@ class DriveClient:
             owners = f.get('owners', [])
             if any(owner.get('emailAddress') == user_email for owner in owners):
                 target_folder_id = f.get('id')
+                logger.info(f"Discovered folder '{f.get('name')}' for user {user_email}.")
                 break
 
         if not target_folder_id:
-            raise Exception(f"No folder named 'AgentMemory' found that was shared by {user_email}. They must create it and share it with {self.sa_email} with Editor permissions.")
+            raise Exception(f"No shared folder found owned by {user_email}. They must create a folder and share it with {self.sa_email} with Editor permissions.")
 
         self.folder_id_cache[user_email] = target_folder_id
         return target_folder_id
@@ -121,4 +122,3 @@ class DriveClient:
         request = self.service.files().update(fileId=file_id, media_body=media)
         self._execute_with_retry(request)
         logger.info(f"Updated full content of {filename} for {user_email}")
-

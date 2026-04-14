@@ -20,6 +20,8 @@ if [[ -z "$REGION" ]]; then
 fi
 REGION=${REGION:-us-central1}
 
+
+SA_NAME="agentmemory-sa"
 # Create a GCS bucket for users.json if it doesn't exist
 BUCKET_NAME="${GCP_PROJECT}-agentmemory-users"
 echo "Ensuring GCS bucket gs://${BUCKET_NAME} exists..."
@@ -38,7 +40,7 @@ gcloud run deploy $APP_NAME \
   --source . \
   --region $REGION \
   --allow-unauthenticated \
-  --service-account=drive-rag-sync-sa@${GCP_PROJECT}.iam.gserviceaccount.com \
+  --service-account=${SA_NAME}@${GCP_PROJECT}.iam.gserviceaccount.com \
   --execution-environment=gen2 \
   --add-volume=name=users-vol,type=cloud-storage,bucket=${BUCKET_NAME} \
   --add-volume-mount=volume=users-vol,mount-path=/mnt/gcs \
