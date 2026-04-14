@@ -77,27 +77,20 @@ if __name__ == "__main__":
     if app:
         import uvicorn
         
-        # Override the Starlette trusted host middleware which rejects GCP Load Balancer host headers
-        for idx, mw in enumerate(app.user_middleware):
-            if "TrustedHostMiddleware" in str(mw.cls):
-                app.user_middleware.pop(idx)
-        app.middleware_stack = app.build_middleware_stack()
+        # Override the Starlette trusted host middleware completely via class replacement so
+        # incoming GCP LB proxy requests dont drop.
+        import starlette.middleware.trustedhost
+        starlette.middleware.trustedhost.TrustedHostMiddleware = type(
+            "TrustedHostMiddleware",
+            (object,),
+            {"__init__": lambda self, app, allowed_hosts=None: setattr(self, "app", app),
+             "__call__": lambda self, scope, receive, send: self.app(scope, receive, send)}
+        )
         
-        async def asgi_wrapper(scope, receive, send):
-            if scope["type"] == "http":
-                new_headers = []
-                for k, v in scope.get("headers", []):
-                    if k == b"host":
-                        # Strip standard host to prevent Starlette issues
-                        new_headers.append((b"host", b"localhost"))
-                    else:
-                        new_headers.append((k, v))
-                scope["headers"] = new_headers
-            await app(scope, receive, send)
-
-        uvicorn.run(asgi_wrapper, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+        uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
     else:
         # GCP Cloud Run needs this so Starlette doesn't throw 'Invalid Host header'
         mcp.settings.port = port
         mcp.settings.host = "0.0.0.0"
+        mcp.settings.allow_hosts = ["*"]
         mcp.run("sse")
