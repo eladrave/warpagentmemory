@@ -63,10 +63,15 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
         return f"Error searching memory: {e}"
 
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.getenv("PORT", "8080"))
-    logger.info(f"Starting AgentMemory SSE MCP server natively with uvicorn on port {port}")
-    # In older versions of FastMCP, to get the raw app to bind to a specific port on Cloud Run cleanly:
+    logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
+    
+    # GCP Cloud Run needs this so Starlette doesn't throw 'Invalid Host header'
+    # Actually, fastmcp's SSE backend uses starlette. By default Starlette doesn't throw Invalid Host Header
+    # UNLESS the load balancer proxy forces it or we hit a specific path.
+    # The MCP SSE endpoint is at /mcp/sse or /sse? FastMCP serves /sse
     mcp.settings.port = port
     mcp.settings.host = "0.0.0.0"
+    
+    # Starlette's run wrapper doesn't use `allow_hosts`, it just uses uvicorn. 
     mcp.run("sse")
