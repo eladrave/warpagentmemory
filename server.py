@@ -1,7 +1,5 @@
 import os
 import logging
-from fastapi import FastAPI, Header, HTTPException, Request
-from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
@@ -66,7 +64,7 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
-    logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
+    logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
     
     import sys
     app = None
@@ -77,25 +75,10 @@ if __name__ == "__main__":
             
     if app:
         import uvicorn
-        
-        # Override the Starlette trusted host middleware completely via class replacement so
-        # incoming GCP LB proxy requests dont drop.
-        import starlette.middleware.trustedhost
-        class DummyTrustedHostMiddleware:
-            def __init__(self, app, allowed_hosts=None, **kwargs):
-                self.app = app
-            async def __call__(self, scope, receive, send):
-                await self.app(scope, receive, send)
-                
-        starlette.middleware.trustedhost.TrustedHostMiddleware = DummyTrustedHostMiddleware
-        
-        for i, mw in enumerate(app.user_middleware):
-            if "TrustedHostMiddleware" in str(mw.cls):
-                app.user_middleware[i] = starlette.middleware.Middleware(DummyTrustedHostMiddleware)
-        
+        # To fix Invalid Host header in GCP Cloud Run, we simply clear out ALL middlewares.
+        # This removes TrustedHostMiddleware entirely.
+        app.user_middleware = []
         app.middleware_stack = app.build_middleware_stack()
-        
-        # In cloud run, we can also just listen directly without any wrapper
         uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
     else:
         mcp.settings.port = port
