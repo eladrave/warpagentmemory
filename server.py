@@ -1,7 +1,5 @@
 import os
 import logging
-from fastapi import FastAPI, Header, HTTPException, Request
-from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
@@ -15,7 +13,6 @@ logger = logging.getLogger(__name__)
 memory_manager = MemoryManager()
 users_manager = UserManager()
 
-# FastMCP creates its own Starlette app for SSE. 
 mcp = FastMCP("AgentMemory")
 
 def get_token_from_ctx(ctx: Context) -> str:
@@ -65,23 +62,24 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-app = FastAPI()
-
-# FastMCP .get_asgi_app() doesn't exist in all pip versions, so we use ._mcp_server or starlette app directly.
-# FastMCP uses an internal starlette Server object for SSE.
-# Since we only deploy this to cloud run right now, let's just let FastMCP run SSE and use proxy-headers from env.
-# Uvicorn reads FORWARDED_ALLOW_IPS from env.
-
 if __name__ == "__main__":
-    import uvicorn
-    # Make sure uvicorn trusts all proxy headers from GCP Cloud Run LB
-    os.environ["FORWARDED_ALLOW_IPS"] = "*" 
     port = int(os.getenv("PORT", "8080"))
-    
     logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
     
-    # Run FastMCP SSE. By default this uses Uvicorn under the hood.
-    # The env var FORWARDED_ALLOW_IPS=* solves the 421 Invalid Host Header issue.
+    # GCP Cloud Run throws 421 Invalid Host Header if we use default fastmcp SSE backend which has Starlette
+    # TrustedHostMiddleware with ["*"] as a string not a list or something similar inside their internal implementation.
+    # To cleanly bypass this inside of FastMCP's internal structure:
     mcp.settings.port = port
     mcp.settings.host = "0.0.0.0"
+    
+    import starlette.middleware.trustedhost
+    
+    # Hack the module so TrustedHostMiddleware ALWAYS accepts the host
+    starlette.middleware.trustedhost.TrustedHostMiddleware = type(
+        "TrustedHostMiddleware",
+        (object,),
+        {"__init__": lambda self, app, allowed_hosts=None: setattr(self, "app", app),
+         "__call__": lambda self, scope, receive, send: self.app(scope, receive, send)}
+    )
+    
     mcp.run("sse")
