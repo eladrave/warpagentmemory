@@ -80,12 +80,21 @@ if __name__ == "__main__":
         # Override the Starlette trusted host middleware completely via class replacement so
         # incoming GCP LB proxy requests dont drop.
         import starlette.middleware.trustedhost
-        starlette.middleware.trustedhost.TrustedHostMiddleware = type(
-            "TrustedHostMiddleware",
-            (object,),
-            {"__init__": lambda self, app, allowed_hosts=None: setattr(self, "app", app),
-             "__call__": lambda self, scope, receive, send: self.app(scope, receive, send)}
-        )
+        class DummyTrustedHostMiddleware:
+            def __init__(self, app, allowed_hosts=None, **kwargs):
+                self.app = app
+            async def __call__(self, scope, receive, send):
+                await self.app(scope, receive, send)
+                
+        starlette.middleware.trustedhost.TrustedHostMiddleware = DummyTrustedHostMiddleware
+        
+        # Some versions of Starlette re-evaluate it if it's already in the stack
+        for i, mw in enumerate(app.user_middleware):
+            if "TrustedHostMiddleware" in str(mw.cls):
+                app.user_middleware[i] = starlette.middleware.Middleware(DummyTrustedHostMiddleware)
+        
+        # Force rebuild
+        app.middleware_stack = app.build_middleware_stack()
         
         uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
     else:
