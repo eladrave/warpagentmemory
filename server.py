@@ -1,5 +1,7 @@
 import os
 import logging
+from fastapi import FastAPI, Header, HTTPException, Request
+from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
@@ -13,6 +15,7 @@ logger = logging.getLogger(__name__)
 memory_manager = MemoryManager()
 users_manager = UserManager()
 
+# FastMCP creates its own Starlette app for SSE. 
 mcp = FastMCP("AgentMemory")
 
 def get_token_from_ctx(ctx: Context) -> str:
@@ -62,16 +65,23 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
+app = FastAPI()
+
+# FastMCP .get_asgi_app() doesn't exist in all pip versions, so we use ._mcp_server or starlette app directly.
+# FastMCP uses an internal starlette Server object for SSE.
+# Since we only deploy this to cloud run right now, let's just let FastMCP run SSE and use proxy-headers from env.
+# Uvicorn reads FORWARDED_ALLOW_IPS from env.
+
 if __name__ == "__main__":
+    import uvicorn
+    # Make sure uvicorn trusts all proxy headers from GCP Cloud Run LB
+    os.environ["FORWARDED_ALLOW_IPS"] = "*" 
     port = int(os.getenv("PORT", "8080"))
+    
     logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
     
-    # GCP Cloud Run needs this so Starlette doesn't throw 'Invalid Host header'
-    # Actually, fastmcp's SSE backend uses starlette. By default Starlette doesn't throw Invalid Host Header
-    # UNLESS the load balancer proxy forces it or we hit a specific path.
-    # The MCP SSE endpoint is at /mcp/sse or /sse? FastMCP serves /sse
+    # Run FastMCP SSE. By default this uses Uvicorn under the hood.
+    # The env var FORWARDED_ALLOW_IPS=* solves the 421 Invalid Host Header issue.
     mcp.settings.port = port
     mcp.settings.host = "0.0.0.0"
-    
-    # Starlette's run wrapper doesn't use `allow_hosts`, it just uses uvicorn. 
     mcp.run("sse")
