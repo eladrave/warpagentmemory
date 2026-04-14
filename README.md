@@ -5,7 +5,7 @@ It replicates the `supermemory-mcp` functionality but uses your own Google Drive
 
 ## Features
 - **MCP Server (SSE):** Plugs into any agent using the `mcp` SDK to expose `add_memory` and `search_memory`.
-- **Multi-User Sync:** Each user gets their own Google Drive folder ID mapped to an API Token.
+- **Multi-User Sync:** Each user gets their own auto-discovered Google Drive folder mapped to an API Token.
 - **Google Drive Storage:** Keeps your memories organized by day (`memory_YYYY-MM-DD.md`) and a synthesized `generic_memory.md`.
 - **Gemini RAG Sync:** Automatically maintains a Gemini File Store containing your memories for high-speed, intelligent RAG retrieval.
 - **Dreaming:** Periodically runs a background task to summarize daily memories into a concise `generic_memory.md` using Gemini.
@@ -27,14 +27,13 @@ pip install -r requirements.txt
 
 ### 2. User Registration
 For a user to use this service, they must:
-1. Create a folder in their personal Google Drive.
+1. Create a folder in their personal Google Drive named exactly `AgentMemory`.
 2. Share that folder with "Editor" permissions to the Service Account email.
-3. Find the Folder ID (from the URL).
-4. Run the register command:
+3. The Admin runs the register command:
 ```bash
-python cli.py register user@email.com FOLDER_ID
+python cli.py register user@email.com
 ```
-This generates an **API Token** (`am_...`) which is required for all future calls.
+This generates an **API Token** (`am_...`) which is required for all future calls. The system will auto-discover the folder ID when that user adds a memory!
 
 ### 3. CLI Memory Commands
 Add a memory:
@@ -71,8 +70,8 @@ Deploy seamlessly to Google Cloud Run with GCS-mounted User Config:
 ```
 
 ## Architecture
-- `users.py`: Flat JSON mapping `API_TOKEN -> email, folder_id`.
-- `drive_api.py`: Manages the connection to Google Drive.
+- `users.py`: Flat JSON mapping `API_TOKEN -> email`.
+- `drive_api.py`: Manages the connection to Google Drive and auto-discovers `AgentMemory` folders.
 - `gemini_api.py`: Manages the Gemini File Search store and RAG retrieval.
 - `memory_manager.py`: Combines Drive and Gemini with caching, debouncing, and background scheduling.
 - `cli.py`: The command line interface.

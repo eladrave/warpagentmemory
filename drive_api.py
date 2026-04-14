@@ -32,13 +32,38 @@ class DriveClient:
             self.service = build('drive', 'v3', credentials=credentials)
             logger.info("Initialized Google Drive with Default Credentials.")
             
+        self.folder_id_cache: Dict[str, str] = {}
         self.file_id_cache: Dict[str, str] = {}
 
     @retry(wait=wait_exponential(multiplier=1, min=4, max=60), stop=stop_after_attempt(5), retry=retry_if_exception_type(HttpError))
     def _execute_with_retry(self, request):
         return request.execute()
 
-    def get_or_create_file(self, folder_id: str, filename: str) -> str:
+    def get_user_folder_id(self, user_email: str) -> str:
+        if user_email in self.folder_id_cache:
+            return self.folder_id_cache[user_email]
+
+        # Auto-discover folder named "AgentMemory" shared by the user
+        query = "name='AgentMemory' and mimeType='application/vnd.google-apps.folder' and trashed=false and sharedWithMe=true"
+        request = self.service.files().list(q=query, spaces='drive', fields='files(id, name, owners)')
+        results = self._execute_with_retry(request)
+        files = results.get('files', [])
+
+        target_folder_id = None
+        for f in files:
+            owners = f.get('owners', [])
+            if any(owner.get('emailAddress') == user_email for owner in owners):
+                target_folder_id = f.get('id')
+                break
+
+        if not target_folder_id:
+            raise Exception(f"No folder named 'AgentMemory' found that was shared by {user_email}. They must create it and share it with {self.sa_email} with Editor permissions.")
+
+        self.folder_id_cache[user_email] = target_folder_id
+        return target_folder_id
+
+    def get_or_create_file(self, user_email: str, filename: str) -> str:
+        folder_id = self.get_user_folder_id(user_email)
         cache_key = f"{folder_id}_{filename}"
         if cache_key in self.file_id_cache:
             return self.file_id_cache[cache_key]
@@ -58,17 +83,16 @@ class DriveClient:
             request = self.service.files().create(body=file_metadata, media_body=media, fields='id')
             file = self._execute_with_retry(request)
             file_id = file.get('id')
-            logger.info(f"Created file {filename} in {folder_id} with ID: {file_id}")
+            logger.info(f"Created file {filename} for {user_email} with ID: {file_id}")
         else:
             file_id = files[0].get('id')
-            logger.info(f"Found file {filename} in {folder_id} with ID: {file_id}")
 
         self.file_id_cache[cache_key] = file_id
         return file_id
 
-    def read_file(self, folder_id: str, filename: str) -> str:
+    def read_file(self, user_email: str, filename: str) -> str:
         try:
-            file_id = self.get_or_create_file(folder_id, filename)
+            file_id = self.get_or_create_file(user_email, filename)
             request = self.service.files().get_media(fileId=file_id)
             content = self._execute_with_retry(request)
             return content.decode('utf-8')
@@ -77,23 +101,24 @@ class DriveClient:
                 return ""
             raise e
         except Exception as e:
-            logger.error(f"Failed to read file {filename} from {folder_id}: {e}")
+            logger.error(f"Failed to read file {filename} for {user_email}: {e}")
             return ""
 
-    def append_to_file(self, folder_id: str, filename: str, text: str):
-        file_id = self.get_or_create_file(folder_id, filename)
-        current_content = self.read_file(folder_id, filename)
+    def append_to_file(self, user_email: str, filename: str, text: str):
+        file_id = self.get_or_create_file(user_email, filename)
+        current_content = self.read_file(user_email, filename)
         
         new_content = current_content + "\n" + text + "\n"
         
         media = MediaIoBaseUpload(io.BytesIO(new_content.encode('utf-8')), mimetype='text/markdown', resumable=True)
         request = self.service.files().update(fileId=file_id, media_body=media)
         self._execute_with_retry(request)
-        logger.info(f"Appended text to {filename} in {folder_id}")
+        logger.info(f"Appended text to {filename} for {user_email}")
 
-    def update_file_exact(self, folder_id: str, filename: str, content: str):
-        file_id = self.get_or_create_file(folder_id, filename)
+    def update_file_exact(self, user_email: str, filename: str, content: str):
+        file_id = self.get_or_create_file(user_email, filename)
         media = MediaIoBaseUpload(io.BytesIO(content.encode('utf-8')), mimetype='text/markdown', resumable=True)
         request = self.service.files().update(fileId=file_id, media_body=media)
         self._execute_with_retry(request)
-        logger.info(f"Updated full content of {filename} in {folder_id}")
+        logger.info(f"Updated full content of {filename} for {user_email}")
+

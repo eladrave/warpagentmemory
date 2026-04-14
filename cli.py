@@ -14,7 +14,6 @@ def main():
     # Register user
     reg_parser = subparsers.add_parser("register", help="Register a user and get a token")
     reg_parser.add_argument("email", type=str, help="User's email address")
-    reg_parser.add_argument("folder_id", type=str, help="Google Drive Folder ID shared with the SA")
     
     # Add memory
     add_parser = subparsers.add_parser("add", help="Add a new memory")
@@ -38,7 +37,7 @@ def main():
     
     if args.command == "register":
         users = UserManager()
-        token = users.add_user(args.email, args.folder_id)
+        token = users.add_user(args.email)
         print(f"Successfully registered user {args.email}.")
         print(f"API Token: {token}")
         print("Please save this token and provide it to the MCP client.")

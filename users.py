@@ -6,7 +6,6 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# If running in Cloud Run with mounted GCS, this might be e.g. /mnt/gcs/users.json
 USERS_FILE_PATH = os.getenv("USERS_FILE_PATH", "users.json")
 
 class UserManager:
@@ -30,7 +29,6 @@ class UserManager:
 
     def _save_users(self, data: Dict):
         try:
-            # Atomic write approach to prevent corruption
             tmp_path = self.file_path + ".tmp"
             with open(tmp_path, "w") as f:
                 json.dump(data, f, indent=4)
@@ -38,23 +36,20 @@ class UserManager:
         except Exception as e:
             logger.error(f"Error saving users.json: {e}")
 
-    def add_user(self, email: str, folder_id: str) -> str:
+    def add_user(self, email: str) -> str:
         """Adds a user and returns their new API token."""
         data = self._load_users()
         
         # Check if user already exists
         for token, info in data.items():
             if info.get("email") == email:
-                logger.info(f"User {email} already exists, updating folder_id.")
-                data[token]["folder_id"] = folder_id
-                self._save_users(data)
+                logger.info(f"User {email} already exists.")
                 return token
                 
         # Create new user
         token = "am_" + str(uuid.uuid4()).replace("-", "")
         data[token] = {
-            "email": email,
-            "folder_id": folder_id
+            "email": email
         }
         self._save_users(data)
         logger.info(f"Created new token for {email}")

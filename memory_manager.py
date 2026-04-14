@@ -60,22 +60,22 @@ class MemoryManager:
                 logger.error(f"Invalid token {token} during flush.")
                 continue
                 
-            folder_id = user_info["folder_id"]
             user_email = user_info["email"]
             content_to_flush = "\n".join(memories)
             
             try:
-                # 1. Append to Google Drive
-                self.drive.append_to_file(folder_id, today_file, content_to_flush)
+                # 1. Append to Google Drive (folder discovery handled by Drive API)
+                self.drive.append_to_file(user_email, today_file, content_to_flush)
                 
                 # 2. Trigger Gemini Update
-                full_content = self.drive.read_file(folder_id, today_file)
+                full_content = self.drive.read_file(user_email, today_file)
                 tmp_path = f"/tmp/{today_file}_{user_email}"
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     f.write(full_content)
                     
                 store_display_name = f"AgentMemory_{user_email}"
                 self.gemini.store_name_cache = None # Clear cache to ensure we get the right user's store
+                
                 # Override the store name explicitly for this user
                 def _get_store():
                     for s in self.gemini.client.file_search_stores.list():
@@ -164,16 +164,15 @@ class MemoryManager:
             
     def _dream_user(self, user_info: Dict):
         user_email = user_info["email"]
-        folder_id = user_info["folder_id"]
         logger.info(f"Dreaming for {user_email}...")
         
         try:
-            generic_mem = self.drive.read_file(folder_id, "generic_memory.md")
+            generic_mem = self.drive.read_file(user_email, "generic_memory.md")
             today = datetime.datetime.now()
             yesterday = today - datetime.timedelta(days=1)
             
-            today_mem = self.drive.read_file(folder_id, f"memory_{today.strftime('%Y-%m-%d')}.md")
-            yesterday_mem = self.drive.read_file(folder_id, f"memory_{yesterday.strftime('%Y-%m-%d')}.md")
+            today_mem = self.drive.read_file(user_email, f"memory_{today.strftime('%Y-%m-%d')}.md")
+            yesterday_mem = self.drive.read_file(user_email, f"memory_{yesterday.strftime('%Y-%m-%d')}.md")
             
             if not today_mem and not yesterday_mem:
                 logger.info(f"No recent memories to dream about for {user_email}.")
@@ -202,7 +201,7 @@ class MemoryManager:
             if new_generic_mem.endswith("```"):
                 new_generic_mem = new_generic_mem[:-3]
                 
-            self.drive.update_file_exact(folder_id, "generic_memory.md", new_generic_mem.strip())
+            self.drive.update_file_exact(user_email, "generic_memory.md", new_generic_mem.strip())
             
             tmp_path = f"/tmp/generic_memory_{user_email}.md"
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -240,9 +239,14 @@ class MemoryManager:
             raise ValueError("Invalid API token.")
         
         user_email = user_info["email"]
-        folder_id = user_info["folder_id"]
         logger.info(f"Forcing full sync of all memories for {user_email}...")
         
+        try:
+            folder_id = self.drive.get_user_folder_id(user_email)
+        except Exception as e:
+            logger.error(f"Failed to find folder for {user_email}: {e}")
+            return
+            
         query = f"'{folder_id}' in parents and trashed=false"
         request = self.drive.service.files().list(q=query, spaces='drive', fields='files(id, name)')
         results = self.drive._execute_with_retry(request)
@@ -264,7 +268,7 @@ class MemoryManager:
         for f in files:
             name = f.get('name')
             if name.endswith('.md'):
-                content = self.drive.read_file(folder_id, name)
+                content = self.drive.read_file(user_email, name)
                 tmp_path = f"/tmp/{name}_{user_email}"
                 with open(tmp_path, "w", encoding="utf-8") as tmp_f:
                     tmp_f.write(content)
