@@ -12,7 +12,7 @@ class GeminiClient:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         if not self.api_key:
-            raise ValueError("GEMINI_API_KEY is not set.")
+            logger.error("GEMINI_API_KEY is not set. Service will fail if attempting to use Gemini."); self.client = None; return
         self.client = genai.Client(api_key=self.api_key)
         self.store_name_cache: Optional[str] = None
         

@@ -44,7 +44,6 @@ gcloud run deploy $APP_NAME \
   --execution-environment=gen2 \
   --add-volume=name=users-vol,type=cloud-storage,bucket=${BUCKET_NAME} \
   --add-volume-mount=volume=users-vol,mount-path=/mnt/gcs \
-  --set-env-vars=USERS_FILE_PATH=/mnt/gcs/users.json \
-  --update-env-vars=DREAM_INTERVAL_HOURS=24
+  --update-env-vars=USERS_FILE_PATH=/mnt/gcs/users.json,DREAM_INTERVAL_HOURS=24
 
 echo "Deployment complete! Make sure to upload your .env secrets (GEMINI_API_KEY) via Cloud Run Secret Manager in the GCP Console."

@@ -18,7 +18,7 @@ COPY . .
 RUN chmod +x *.py
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8080
 
-# Start server
+# Start server using the FastMCP sse loop natively
 CMD ["python", "server.py"]

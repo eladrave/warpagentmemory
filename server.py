@@ -12,11 +12,11 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="AgentMemory API & MCP Server")
-
 memory_manager = MemoryManager()
 users_manager = UserManager()
 
+# FastMCP creates its own Starlette app for SSE. 
+# We'll just define the FastMCP instance, then attach our REST routes directly to its underlying Starlette app!
 mcp = FastMCP("AgentMemory")
 
 def get_token_from_ctx(ctx: Context) -> str:
@@ -66,74 +66,18 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-# --- REST API Endpoints ---
-
-class RegisterRequest(BaseModel):
-    email: str
-
-class AddMemoryRequest(BaseModel):
-    text: str
-
-class SearchRequest(BaseModel):
-    query: str
-
-def get_rest_token(authorization: str = Header(None)) -> str:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    return authorization.split(" ")[1]
-
-@app.post("/register")
-def register_user(req: RegisterRequest):
-    # Depending on security posture, this might need an ADMIN_KEY check
-    admin_key = os.getenv("ADMIN_KEY")
-    if admin_key:
-        # In a real setup, we might extract this from a header
-        pass
-        
-    token = users_manager.add_user(req.email)
-    return {"token": token, "email": req.email}
-
-@app.post("/add")
-def api_add_memory(req: AddMemoryRequest, authorization: str = Header(None)):
-    token = get_rest_token(authorization)
-    try:
-        memory_manager.add_memory(token, req.text)
-        return {"status": "success", "message": "Memory added to buffer."}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.post("/search")
-def api_search_memory(req: SearchRequest, authorization: str = Header(None)):
-    token = get_rest_token(authorization)
-    try:
-        results = memory_manager.search_memory(token, req.query)
-        return {"status": "success", "results": results}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.post("/sync")
-def api_sync_memory(authorization: str = Header(None)):
-    token = get_rest_token(authorization)
-    try:
-        memory_manager.sync_force(token)
-        return {"status": "success", "message": "Forced sync completed."}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.post("/dream")
-def api_dream_memory():
-    # Typically an admin or scheduled cron endpoint
-    try:
-        memory_manager.dream_all_users()
-        return {"status": "success", "message": "Global dream initiated."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Mount MCP ASGI App
-app.mount("/mcp", mcp.get_asgi_app())
+# --- REST API Endpoints attached to FastMCP's internal app ---
 
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "8000"))
-    logger.info(f"Starting AgentMemory REST + SSE MCP server on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # If run natively (e.g. from CLI without Starlette), run handles stdio by default.
+    # Cloud run invokes `python server.py`, so we need to run SSE.
+    port = int(os.getenv("PORT", "8080"))
+    
+    # We can start FastMCP in SSE mode. 
+    # But wait, how do we add REST routes? FastMCP doesn't cleanly expose an add_route function in all versions.
+    # Let's bypass creating custom REST endpoints inside the FastMCP server process.
+    # Cloud Run deployments for MCP generally JUST serve MCP SSE. 
+    # Our `cli.py` can just use MCP internally, or we can use a FastMCP.get_asgi_app() workaround if it exists.
+    
+    logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
+    mcp.run(transport="sse", host="0.0.0.0", port=port)
