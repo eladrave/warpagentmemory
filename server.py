@@ -64,8 +64,6 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-app = FastAPI()
-
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
     logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
@@ -73,36 +71,25 @@ if __name__ == "__main__":
     import sys
     app = None
     try:
-        # In the exact version installed, sse_app() returns the underlying Starlette app
         app = mcp.sse_app()
     except Exception as e:
         pass
             
     if app:
         import uvicorn
-        
-        # Override the Starlette trusted host middleware completely via class replacement so
-        # incoming GCP LB proxy requests dont drop.
-        import starlette.middleware.trustedhost
-        class DummyTrustedHostMiddleware:
-            def __init__(self, app, allowed_hosts=None, **kwargs):
-                self.app = app
-            async def __call__(self, scope, receive, send):
-                await self.app(scope, receive, send)
-                
-        starlette.middleware.trustedhost.TrustedHostMiddleware = DummyTrustedHostMiddleware
-        
-        # Some versions of Starlette re-evaluate it if it's already in the stack
-        for i, mw in enumerate(app.user_middleware):
+        # To permanently override TrustedHostMiddleware in Starlette 0.40+ (used by FastMCP)
+        # The easiest way is to modify the internal `allowed_hosts` property 
+        for mw in app.user_middleware:
             if "TrustedHostMiddleware" in str(mw.cls):
-                app.user_middleware[i] = starlette.middleware.Middleware(DummyTrustedHostMiddleware)
+                # Python doesn't let us modify the mw.options dict if it's already instantiated sometimes,
+                # but we can just set the class kwargs
+                mw.kwargs["allowed_hosts"] = ["*"]
         
-        # Force rebuild
+        # Now rebuild the stack so it picks up the change
         app.middleware_stack = app.build_middleware_stack()
-        
+
         uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
     else:
-        # GCP Cloud Run needs this so Starlette doesn't throw 'Invalid Host header'
         mcp.settings.port = port
         mcp.settings.host = "0.0.0.0"
         mcp.settings.allow_hosts = ["*"]
