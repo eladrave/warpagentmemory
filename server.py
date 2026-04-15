@@ -1,5 +1,7 @@
 import os
 import logging
+from fastapi import FastAPI, Header, HTTPException, Request
+from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
@@ -62,26 +64,31 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8080"))
-    logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
-    
-    import sys
-    app = None
+# Build app using FastAPI to wrap mcp
+app = FastAPI()
+
+# Mount FastMCP's underlying SSE app
+try:
+    mcp_app = mcp.get_asgi_app()
+    app.mount("/mcp", mcp_app)
+except Exception as e:
+    # Older FastMCP versions hide the app
     try:
-        app = mcp.sse_app()
-    except Exception as e:
-        pass
-            
-    if app:
-        import uvicorn
-        # To fix Invalid Host header in GCP Cloud Run, we simply clear out ALL middlewares.
-        # This removes TrustedHostMiddleware entirely.
-        app.user_middleware = []
-        app.middleware_stack = app.build_middleware_stack()
-        uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
-    else:
-        mcp.settings.port = port
-        mcp.settings.host = "0.0.0.0"
-        mcp.settings.allow_hosts = ["*"]
-        mcp.run("sse")
+        app.mount("/mcp", mcp._mcp_server)
+    except:
+        app.mount("/mcp", mcp._app)
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "8080"))
+    logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
+    # Use FastAPI proxy mode instead of mcp.run directly to safely handle GCP headers
+    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
