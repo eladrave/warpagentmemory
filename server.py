@@ -1,6 +1,6 @@
 import os
 import logging
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
@@ -36,8 +36,6 @@ def get_token_from_ctx(ctx: Context) -> str:
         return test_token
     raise ValueError("Missing Authorization Bearer token or ?token= query parameter.")
 
-# --- MCP Tools ---
-
 @mcp.tool()
 def add_memory(thingToRemember: str, ctx: Context) -> str:
     """
@@ -64,41 +62,21 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8080"))
-    logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
-    
-    import sys
-    app = None
-    try:
-        app = mcp.sse_app()
-    except Exception as e:
-        pass
-            
-    if app:
-        import uvicorn
-        
-        async def asgi_wrapper(scope, receive, send):
-            if scope["type"] == "http":
-                # GCP Cloud Run throws 421 Invalid Host Header with Starlette.
-                # Since Starlette checks the Host header matching standard specs, 
-                # we just strip the Host header entirely and let it default to the proxy IP.
-                new_headers = []
-                for k, v in scope.get("headers", []):
-                    if k.decode('ascii').lower() == "host":
-                        new_headers.append((b"host", b"localhost"))
-                    else:
-                        new_headers.append((k, v))
-                scope["headers"] = new_headers
-                
-                # Also force server to match
-                scope["server"] = ("127.0.0.1", port)
-                
-            await app(scope, receive, send)
+app = FastAPI(title="AgentMemory REST & MCP Server")
 
-        uvicorn.run(asgi_wrapper, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
-    else:
-        # Fallback
-        mcp.settings.port = port
-        mcp.settings.host = "0.0.0.0"
-        mcp.run("sse")
+# EXACT MATCH to driverag mounting:
+app.mount("/mcp", mcp.sse_app())
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "8080"))
+    logger.info(f"Starting AgentMemory API natively on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port, forwarded_allow_ips="*")
