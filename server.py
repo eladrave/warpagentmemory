@@ -1,22 +1,9 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
 from dotenv import load_dotenv
-import starlette.middleware.trustedhost
-
-# --- CRITICAL FIX FOR GOOGLE CLOUD RUN 421 ERRORS ---
-# Overwrite TrustedHostMiddleware entirely before FastMCP or FastAPI ever invoke it
-class DummyTrustedHostMiddleware:
-    def __init__(self, app, allowed_hosts=None, **kwargs):
-        self.app = app
-    async def __call__(self, scope, receive, send):
-        await self.app(scope, receive, send)
-
-starlette.middleware.trustedhost.TrustedHostMiddleware = DummyTrustedHostMiddleware
 
 load_dotenv()
 
@@ -47,6 +34,8 @@ def get_token_from_ctx(ctx: Context) -> str:
         return test_token
     raise ValueError("Missing Authorization Bearer token or ?token= query parameter.")
 
+# --- MCP Tools ---
+
 @mcp.tool()
 def add_memory(thingToRemember: str, ctx: Context) -> str:
     """
@@ -73,37 +62,42 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-# Standard FastAPI app that works natively on Cloud Run
-app = FastAPI()
-
-# Force clear middleware just in case
-app.user_middleware = []
-app.middleware_stack = app.build_middleware_stack()
-
-# Mount FastMCP's underlying SSE app as a sub-app.
-try:
-    mcp_app = mcp.get_asgi_app()
-except Exception:
-    mcp_app = mcp._mcp_server.get_asgi_app() if hasattr(mcp, "_mcp_server") and hasattr(mcp._mcp_server, "get_asgi_app") else mcp._app
-
-# Also strip the FastMCP inner starlette app
-if hasattr(mcp_app, "user_middleware"):
-    mcp_app.user_middleware = []
-    mcp_app.middleware_stack = mcp_app.build_middleware_stack()
-
-app.mount("/mcp", mcp_app)
-
-@app.get("/")
-def root():
-    return {"status": "ok"}
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.getenv("PORT", "8080"))
-    logger.info(f"Starting AgentMemory API natively on port {port}")
-    # Run FastAPI via standard uvicorn, which handles GCP headers properly natively.
+    logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
+    
+    # FastMCP SSE explicitly checks the host header against 'localhost' when it initializes its SSE connections
+    # We must start the app completely natively with Uvicorn and disable host-checks.
+    
+    # Grab the underlying starlette app.
+    app = None
+    try:
+        app = mcp.get_asgi_app()
+    except AttributeError:
+        try:
+            app = mcp._mcp_server.get_asgi_app()
+        except AttributeError:
+            app = mcp._app
+    
+    import uvicorn
+    import starlette.middleware.trustedhost
+    
+    # Nuke the trusted host middleware because GCP alters headers which causes 421s
+    class DummyTrustedHostMiddleware:
+        def __init__(self, app, allowed_hosts=None, **kwargs):
+            self.app = app
+        async def __call__(self, scope, receive, send):
+            await self.app(scope, receive, send)
+
+    starlette.middleware.trustedhost.TrustedHostMiddleware = DummyTrustedHostMiddleware
+    
+    try:
+        for i, mw in enumerate(app.user_middleware):
+            if "TrustedHostMiddleware" in str(mw.cls):
+                app.user_middleware[i] = starlette.middleware.Middleware(DummyTrustedHostMiddleware)
+        app.middleware_stack = app.build_middleware_stack()
+    except:
+        pass
+        
+    # We run it manually. Uvicorn forwarded_allow_ips works best.
     uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
