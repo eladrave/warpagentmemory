@@ -41,3 +41,16 @@ The Google `genai` File Search API will periodically reject `.md` files during c
 ./deploy.sh
 ```
 This provisions the GCS bucket (`<project>-agentmemory-users`), mounts it, and deploys `server:app` via Uvicorn to Cloud Run.
+
+### New CRUD Capabilities
+As of the latest updates, this system supports full CRUD operations on Agent Memory. 
+When an agent calls `add_memory`, the system explicitly generates an 8-character ID and prepends it to the memory string (e.g. `[ID: a1b2c3d4]`). 
+
+When an agent needs to perform management tasks on the memory, they can use these new tools:
+- `get_all_memories(token)`: Dumps the entire history.
+- `get_memories_by_time(start_date, end_date, token)`: Filters memories between `YYYY-MM-DD` strings.
+- `delete_memory(memory_id, token)`: Scans all local `.txt` files for `[ID: memory_id]`, deletes the line from the local file, rewrites it, and forces a Gemini resync.
+- `resync_memories(token)`: Useful if an agent or user manually imports `.txt` files directly to the GCS volume. This drops the existing Gemini corpus and uploads all files synchronously.
+
+### Proactive Skill Injection
+Agents using this system are heavily prompted via `SKILL.md` to be extremely proactive. They are instructed to silently run `add_memory` on their own volition anytime they discover facts or preferences about the user, and to proactively run `search_memory` when a user asks a context-heavy question, ensuring long-term continuity without explicit user instruction.
