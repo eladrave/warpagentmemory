@@ -66,7 +66,7 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
-    logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
+    logger.info(f"Starting AgentMemory SSE MCP server on port {port}")
     
     import sys
     app = None
@@ -77,20 +77,28 @@ if __name__ == "__main__":
             
     if app:
         import uvicorn
-        # To permanently override TrustedHostMiddleware in Starlette 0.40+ (used by FastMCP)
-        # The easiest way is to modify the internal `allowed_hosts` property 
-        for mw in app.user_middleware:
-            if "TrustedHostMiddleware" in str(mw.cls):
-                # Python doesn't let us modify the mw.options dict if it's already instantiated sometimes,
-                # but we can just set the class kwargs
-                mw.kwargs["allowed_hosts"] = ["*"]
         
-        # Now rebuild the stack so it picks up the change
-        app.middleware_stack = app.build_middleware_stack()
+        async def asgi_wrapper(scope, receive, send):
+            if scope["type"] == "http":
+                # GCP Cloud Run throws 421 Invalid Host Header with Starlette.
+                # Since Starlette checks the Host header matching standard specs, 
+                # we just strip the Host header entirely and let it default to the proxy IP.
+                new_headers = []
+                for k, v in scope.get("headers", []):
+                    if k.decode('ascii').lower() == "host":
+                        new_headers.append((b"host", b"localhost"))
+                    else:
+                        new_headers.append((k, v))
+                scope["headers"] = new_headers
+                
+                # Also force server to match
+                scope["server"] = ("127.0.0.1", port)
+                
+            await app(scope, receive, send)
 
-        uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+        uvicorn.run(asgi_wrapper, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
     else:
+        # Fallback
         mcp.settings.port = port
         mcp.settings.host = "0.0.0.0"
-        mcp.settings.allow_hosts = ["*"]
         mcp.run("sse")
