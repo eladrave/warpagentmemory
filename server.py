@@ -64,31 +64,46 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-# Build app using FastAPI to wrap mcp
 app = FastAPI()
 
-# Mount FastMCP's underlying SSE app
-try:
-    mcp_app = mcp.get_asgi_app()
-    app.mount("/mcp", mcp_app)
-except Exception as e:
-    # Older FastMCP versions hide the app
-    try:
-        app.mount("/mcp", mcp._mcp_server)
-    except:
-        app.mount("/mcp", mcp._app)
-
-@app.get("/")
-def root():
-    return {"status": "ok"}
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.getenv("PORT", "8080"))
     logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
-    # Use FastAPI proxy mode instead of mcp.run directly to safely handle GCP headers
-    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+    
+    import sys
+    app = None
+    try:
+        # In the exact version installed, sse_app() returns the underlying Starlette app
+        app = mcp.sse_app()
+    except Exception as e:
+        pass
+            
+    if app:
+        import uvicorn
+        
+        # Override the Starlette trusted host middleware completely via class replacement so
+        # incoming GCP LB proxy requests dont drop.
+        import starlette.middleware.trustedhost
+        class DummyTrustedHostMiddleware:
+            def __init__(self, app, allowed_hosts=None, **kwargs):
+                self.app = app
+            async def __call__(self, scope, receive, send):
+                await self.app(scope, receive, send)
+                
+        starlette.middleware.trustedhost.TrustedHostMiddleware = DummyTrustedHostMiddleware
+        
+        # Some versions of Starlette re-evaluate it if it's already in the stack
+        for i, mw in enumerate(app.user_middleware):
+            if "TrustedHostMiddleware" in str(mw.cls):
+                app.user_middleware[i] = starlette.middleware.Middleware(DummyTrustedHostMiddleware)
+        
+        # Force rebuild
+        app.middleware_stack = app.build_middleware_stack()
+        
+        uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+    else:
+        # GCP Cloud Run needs this so Starlette doesn't throw 'Invalid Host header'
+        mcp.settings.port = port
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.allow_hosts = ["*"]
+        mcp.run("sse")
