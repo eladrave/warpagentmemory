@@ -20,6 +20,5 @@ RUN chmod +x *.py
 # Expose port
 EXPOSE 8080
 
-# The FastMCP CLI defaults to localhost, so let's run the server using fastmcp CLI directly, setting the host
-# Nevermind, our server.py has the port binding baked in.
-CMD ["python", "server.py"]
+# Start server using standard uvicorn
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]

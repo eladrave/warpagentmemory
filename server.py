@@ -1,19 +1,24 @@
 import os
 import logging
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
 from dotenv import load_dotenv
 
+# --- Configuration & Logging ---
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("AgentMemory")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+app = FastAPI(title="AgentMemory MCP Server")
 
 memory_manager = MemoryManager()
 users_manager = UserManager()
 
 mcp = FastMCP("AgentMemory")
+mcp.settings.transport_security.enable_dns_rebinding_protection = False
 
 def get_token_from_ctx(ctx: Context) -> str:
     try:
@@ -62,42 +67,13 @@ def search_memory(informationToGet: str, ctx: Context) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8080"))
-    logger.info(f"Starting AgentMemory SSE MCP server natively on port {port}")
-    
-    # FastMCP SSE explicitly checks the host header against 'localhost' when it initializes its SSE connections
-    # We must start the app completely natively with Uvicorn and disable host-checks.
-    
-    # Grab the underlying starlette app.
-    app = None
-    try:
-        app = mcp.get_asgi_app()
-    except AttributeError:
-        try:
-            app = mcp._mcp_server.get_asgi_app()
-        except AttributeError:
-            app = mcp._app
-    
-    import uvicorn
-    import starlette.middleware.trustedhost
-    
-    # Nuke the trusted host middleware because GCP alters headers which causes 421s
-    class DummyTrustedHostMiddleware:
-        def __init__(self, app, allowed_hosts=None, **kwargs):
-            self.app = app
-        async def __call__(self, scope, receive, send):
-            await self.app(scope, receive, send)
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "AgentMemory"}
 
-    starlette.middleware.trustedhost.TrustedHostMiddleware = DummyTrustedHostMiddleware
-    
-    try:
-        for i, mw in enumerate(app.user_middleware):
-            if "TrustedHostMiddleware" in str(mw.cls):
-                app.user_middleware[i] = starlette.middleware.Middleware(DummyTrustedHostMiddleware)
-        app.middleware_stack = app.build_middleware_stack()
-    except:
-        pass
-        
-    # We run it manually. Uvicorn forwarded_allow_ips works best.
-    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+# Mount FastMCP endpoint EXACTLY as driverag does
+app.mount("/mcp", mcp.sse_app())
