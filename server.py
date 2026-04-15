@@ -34,7 +34,7 @@ def get_token_from_ctx(ctx: Context) -> str:
     except Exception:
         pass
         
-    test_token = os.getenv("TEST_TOKEN")
+    test_token = os.getenv("AGENTMEMORY_TOKEN")
     if test_token:
         return test_token
     raise ValueError("Missing Authorization Bearer token or ?token= query parameter.")
@@ -49,7 +49,7 @@ def add_memory(thingToRemember: str, token: str = None) -> str:
     """
     try:
         if not token:
-            token = os.getenv("TEST_TOKEN")
+            token = os.getenv("AGENTMEMORY_TOKEN")
         mem_id = memory_manager.add_memory(token, thingToRemember)
         return f"Memory [ID:{mem_id}] added successfully (queued for sync)."
     except Exception as e:
@@ -63,7 +63,7 @@ def search_memory(informationToGet: str, token: str = None) -> str:
     """
     try:
         if not token:
-            token = os.getenv("TEST_TOKEN")
+            token = os.getenv("AGENTMEMORY_TOKEN")
         results = memory_manager.search_memory(token, informationToGet)
         return results if results else "No relevant memories found."
     except Exception as e:
@@ -77,7 +77,7 @@ def get_all_memories(token: str = None) -> str:
     """
     try:
         if not token:
-            token = os.getenv("TEST_TOKEN")
+            token = os.getenv("AGENTMEMORY_TOKEN")
         return memory_manager.get_all_memories(token)
     except Exception as e:
         return f"Error fetching memories: {e}"
@@ -91,7 +91,7 @@ def get_memories_by_time(start_date: str, end_date: str, token: str = None) -> s
     """
     try:
         if not token:
-            token = os.getenv("TEST_TOKEN")
+            token = os.getenv("AGENTMEMORY_TOKEN")
         return memory_manager.get_memories_by_time(token, start_date, end_date)
     except Exception as e:
         return f"Error fetching memories by time: {e}"
@@ -104,7 +104,7 @@ def delete_memory(memory_id: str, token: str = None) -> str:
     """
     try:
         if not token:
-            token = os.getenv("TEST_TOKEN")
+            token = os.getenv("AGENTMEMORY_TOKEN")
         return memory_manager.delete_memory(token, memory_id)
     except Exception as e:
         return f"Error deleting memory: {e}"
@@ -117,7 +117,7 @@ def resync_memories(token: str = None) -> str:
     """
     try:
         if not token:
-            token = os.getenv("TEST_TOKEN")
+            token = os.getenv("AGENTMEMORY_TOKEN")
         memory_manager.sync_force(token)
         return "Sync forced successfully."
     except Exception as e:

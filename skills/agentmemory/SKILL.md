@@ -26,7 +26,7 @@ You can update their MCP Settings file (`claude_desktop_config.json`, or Warp's 
       "command": "/Users/eladrave/git/agentmemory/venv/bin/python",
       "args": ["/Users/eladrave/git/agentmemory/server.py"],
       "env": {
-        "TEST_TOKEN": "am_YOUR_API_TOKEN",
+        "AGENTMEMORY_TOKEN": "am_YOUR_API_TOKEN",
         "GEMINI_API_KEY": "YOUR_GEMINI_API_KEY"
       }
     }

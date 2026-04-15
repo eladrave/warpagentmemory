@@ -65,7 +65,7 @@ You can add AgentMemory as an MCP server in Warp by adding the deployed Cloud Ru
       "command": "/path/to/venv/bin/python",
       "args": ["/path/to/server.py"],
       "env": {
-        "TEST_TOKEN": "am_YOUR_GENERATED_TOKEN",
+        "AGENTMEMORY_TOKEN": "am_YOUR_GENERATED_TOKEN",
         "GEMINI_API_KEY": "AIzaSy..."
       }
     }
@@ -87,7 +87,7 @@ Add the following to your `claude_desktop_config.json`:
       "command": "/path/to/venv/bin/python",
       "args": ["/path/to/server.py"],
       "env": {
-        "TEST_TOKEN": "am_YOUR_GENERATED_TOKEN",
+        "AGENTMEMORY_TOKEN": "am_YOUR_GENERATED_TOKEN",
         "GEMINI_API_KEY": "AIzaSy..."
       }
     }
