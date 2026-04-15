@@ -6,28 +6,43 @@ from mcp.server.fastmcp import FastMCP, Context
 from memory_manager import MemoryManager
 from users import UserManager
 from dotenv import load_dotenv
-import starlette.middleware.trustedhost
 
-class DummyTrustedHostMiddleware:
-    def __init__(self, app, allowed_hosts=None, **kwargs):
-        self.app = app
-    async def __call__(self, scope, receive, send):
-        await self.app(scope, receive, send)
-
-starlette.middleware.trustedhost.TrustedHostMiddleware = DummyTrustedHostMiddleware
-
+# --- Configuration & Logging ---
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("AgentMemory")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+app = FastAPI(title="AgentMemory MCP Server")
 
 memory_manager = MemoryManager()
 users_manager = UserManager()
 
 mcp = FastMCP("AgentMemory")
+mcp.settings.transport_security.enable_dns_rebinding_protection = False
+
+def get_token_from_ctx(ctx: Context) -> str:
+    try:
+        if hasattr(ctx, "request_context") and ctx.request_context:
+            req = getattr(ctx.request_context, "request", None)
+            if req:
+                auth_header = req.headers.get("Authorization")
+                if auth_header and auth_header.startswith("Bearer "):
+                    return auth_header.split(" ")[1]
+                token_query = req.query_params.get("token")
+                if token_query:
+                    return token_query
+    except Exception:
+        pass
+        
+    test_token = os.getenv("TEST_TOKEN")
+    if test_token:
+        return test_token
+    raise ValueError("Missing Authorization Bearer token or ?token= query parameter.")
+
+# --- MCP Tools ---
 
 @mcp.tool()
-def add_memory(thingToRemember: str, token: str) -> str:
+def add_memory(thingToRemember: str, token: str = None) -> str:
     """
     Store user information, preferences, and behaviors. 
     Run on explicit commands or implicitly when detecting significant user traits.
@@ -41,7 +56,7 @@ def add_memory(thingToRemember: str, token: str) -> str:
         return f"Error adding memory: {e}"
 
 @mcp.tool()
-def search_memory(informationToGet: str, token: str) -> str:
+def search_memory(informationToGet: str, token: str = None) -> str:
     """
     Search user memories and patterns. 
     Run when explicitly asked or when context about user's past choices would be helpful.
@@ -54,29 +69,13 @@ def search_memory(informationToGet: str, token: str) -> str:
     except Exception as e:
         return f"Error searching memory: {e}"
 
-app = FastAPI(title="AgentMemory REST & MCP Server")
-
-try:
-    mcp_app = mcp.get_asgi_app()
-except Exception:
-    mcp_app = mcp._mcp_server.get_asgi_app() if hasattr(mcp, "_mcp_server") and hasattr(mcp._mcp_server, "get_asgi_app") else mcp._app
-
-if hasattr(mcp_app, "user_middleware"):
-    mcp_app.user_middleware = []
-    mcp_app.middleware_stack = mcp_app.build_middleware_stack()
-
-app.mount("/mcp", mcp_app)
-
 @app.get("/")
 def root():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "AgentMemory"}
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "8080"))
-    logger.info(f"Starting AgentMemory API natively on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+# Mount FastMCP endpoint EXACTLY as driverag does
+app.mount("/mcp", mcp.sse_app())
