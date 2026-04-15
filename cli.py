@@ -25,6 +25,15 @@ def main():
     search_parser.add_argument("--token", type=str, required=True, help="API Token for the user")
     search_parser.add_argument("query", type=str, help="Search query")
     
+    # Get all memories
+    get_all_parser = subparsers.add_parser("get_all", help="Get all memories")
+    get_all_parser.add_argument("--token", type=str, required=True, help="API Token for the user")
+    
+    # Delete memory
+    delete_parser = subparsers.add_parser("delete", help="Delete a memory by its 8-character ID")
+    delete_parser.add_argument("--token", type=str, required=True, help="API Token for the user")
+    delete_parser.add_argument("memory_id", type=str, help="The 8-character memory ID (e.g. abc12345)")
+    
     # Force Sync
     sync_parser = subparsers.add_parser("sync", help="Force sync all memories from Storage to Gemini")
     sync_parser.add_argument("--token", type=str, required=True, help="API Token for the user")
@@ -47,8 +56,8 @@ def main():
     manager = MemoryManager()
     try:
         if args.command == "add":
-            manager.add_memory(args.token, args.text)
-            print("Memory added successfully to local buffer.")
+            mem_id = manager.add_memory(args.token, args.text)
+            print(f"Memory [ID:{mem_id}] added successfully to local buffer.")
             print("Flushing buffer to Storage/Gemini...")
             manager._flush_buffer()
             print("Done.")
@@ -57,6 +66,15 @@ def main():
             print(f"Searching for: {args.query}")
             result = manager.search_memory(args.token, args.query)
             print("\n--- Results ---")
+            print(result)
+            
+        elif args.command == "get_all":
+            result = manager.get_all_memories(args.token)
+            print("\n--- All Memories ---")
+            print(result)
+            
+        elif args.command == "delete":
+            result = manager.delete_memory(args.token, args.memory_id)
             print(result)
             
         elif args.command == "sync":

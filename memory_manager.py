@@ -3,6 +3,7 @@ import time
 import logging
 import datetime
 import threading
+import uuid
 from typing import Dict, List
 from apscheduler.schedulers.background import BackgroundScheduler
 from gemini_api import GeminiClient
@@ -41,16 +42,18 @@ class MemoryManager:
         os.makedirs(user_dir, exist_ok=True)
         return user_dir
 
-    def add_memory(self, token: str, memory_text: str):
+    def add_memory(self, token: str, memory_text: str) -> str:
         timestamp = datetime.datetime.now().strftime("[%H:%M:%S]")
-        entry = f"- {timestamp} {memory_text}"
+        mem_id = str(uuid.uuid4())[:8]
+        entry = f"- {timestamp} [ID:{mem_id}] {memory_text}"
         
         with self.buffer_lock:
             if token not in self.local_buffer:
                 self.local_buffer[token] = []
             self.local_buffer[token].append(entry)
             
-        logger.info(f"Memory added to local buffer for token {token[:10]}...")
+        logger.info(f"Memory {mem_id} added to local buffer for token {token[:10]}...")
+        return mem_id
 
     def _flush_buffer(self):
         with self.buffer_lock:
@@ -117,7 +120,6 @@ class MemoryManager:
                     time.sleep(3)
                     retries += 1
                 
-                # Make sure the actual document exists before moving on, else it might not be available yet
                 logger.info(f"Successfully flushed for {user_email}")
                 
             except Exception as e:
@@ -139,8 +141,6 @@ class MemoryManager:
         with self.buffer_lock:
             context = "\n".join(self.local_buffer.get(token, []))
             
-        # We should also read today's file to append to context, just in case the document is still indexing
-        # Gemini takes a minute to index, so if we rely on the file store immediately after a restart, it might fail.
         user_dir = self._get_user_dir(user_email)
         today_file = self._get_today_filename()
         today_file_path = os.path.join(user_dir, today_file)
@@ -159,7 +159,7 @@ class MemoryManager:
             
         sys_inst = (
             "You are an AI memory retrieval system. You will be asked questions about the user's past actions, preferences, and details. "
-            "Use the provided RAG files to answer. Be concise and accurate. "
+            "Use the provided RAG files to answer. Be concise and accurate. Cite the [ID: xxx] if relevant.\n"
             f"Here is today's raw memory data not yet fully indexed (use it to answer!): \n{context}\n"
         )
         
@@ -175,6 +175,128 @@ class MemoryManager:
         )
         
         return response.text
+        
+    def get_all_memories(self, token: str) -> str:
+        """Reads all local .txt files and returns a massive string of all memories."""
+        user_info = self.users.get_user_by_token(token)
+        if not user_info:
+            raise ValueError("Invalid API token.")
+        
+        user_email = user_info["email"]
+        user_dir = self._get_user_dir(user_email)
+        
+        output = []
+        for filename in sorted(os.listdir(user_dir)):
+            if filename.endswith(".txt"):
+                output.append(f"--- {filename} ---")
+                with open(os.path.join(user_dir, filename), "r", encoding="utf-8") as f:
+                    output.append(f.read().strip())
+                    
+        with self.buffer_lock:
+            if token in self.local_buffer and self.local_buffer[token]:
+                output.append("--- Unflushed Buffer ---")
+                output.append("\n".join(self.local_buffer[token]))
+                
+        if not output:
+            return "No memories found."
+            
+        return "\n\n".join(output)
+        
+    def get_memories_by_time(self, token: str, start_date: str, end_date: str) -> str:
+        """Gets memories between YYYY-MM-DD and YYYY-MM-DD inclusive."""
+        user_info = self.users.get_user_by_token(token)
+        if not user_info:
+            raise ValueError("Invalid API token.")
+        
+        user_email = user_info["email"]
+        user_dir = self._get_user_dir(user_email)
+        
+        output = []
+        for filename in sorted(os.listdir(user_dir)):
+            if filename.startswith("memory_") and filename.endswith(".txt"):
+                # memory_2025-10-10.txt
+                date_str = filename.replace("memory_", "").replace(".txt", "")
+                if start_date <= date_str <= end_date:
+                    output.append(f"--- {filename} ---")
+                    with open(os.path.join(user_dir, filename), "r", encoding="utf-8") as f:
+                        output.append(f.read().strip())
+                        
+        if not output:
+            return f"No memories found between {start_date} and {end_date}."
+            
+        return "\n\n".join(output)
+        
+    def delete_memory(self, token: str, memory_id: str) -> str:
+        """Deletes a specific memory line matching [ID: memory_id] and triggers Gemini resync for that file."""
+        user_info = self.users.get_user_by_token(token)
+        if not user_info:
+            raise ValueError("Invalid API token.")
+        
+        user_email = user_info["email"]
+        user_dir = self._get_user_dir(user_email)
+        
+        deleted = False
+        target_file = None
+        
+        # Check unwritten buffer first
+        with self.buffer_lock:
+            if token in self.local_buffer:
+                new_buf = []
+                for line in self.local_buffer[token]:
+                    if f"[ID:{memory_id}]" in line:
+                        deleted = True
+                    else:
+                        new_buf.append(line)
+                self.local_buffer[token] = new_buf
+                
+        if deleted:
+            return f"Memory {memory_id} deleted from active buffer successfully."
+
+        # Search files
+        for filename in os.listdir(user_dir):
+            if filename.endswith(".txt"):
+                file_path = os.path.join(user_dir, filename)
+                with open(file_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                    
+                new_lines = []
+                for line in lines:
+                    if f"[ID:{memory_id}]" in line:
+                        deleted = True
+                        target_file = filename
+                    else:
+                        new_lines.append(line)
+                        
+                if deleted:
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.writelines(new_lines)
+                    break
+                    
+        if not deleted:
+            return f"Could not find memory with ID {memory_id}."
+            
+        # Re-upload the modified file to Gemini
+        store_display_name = f"AgentMemory_{user_email}"
+        store_name = None
+        for s in self.gemini.client.file_search_stores.list():
+            if s.display_name == store_display_name:
+                store_name = s.name
+                break
+                
+        if store_name and target_file:
+            docs = list(self.gemini.client.file_search_stores.documents.list(parent=store_name))
+            for doc in docs:
+                if getattr(doc, 'display_name', '') == target_file:
+                    self.gemini.client.file_search_stores.documents.delete(name=doc.name, config={'force': True})
+            
+            file_path = os.path.join(user_dir, target_file)
+            self.gemini.client.file_search_stores.upload_to_file_search_store(
+                file_search_store_name=store_name,
+                file=file_path,
+                config={'display_name': target_file}
+            )
+            
+        return f"Memory {memory_id} deleted from {target_file} successfully and store updated."
 
     def dream_all_users(self):
         logger.info("Initiating global dreaming process...")
@@ -217,7 +339,7 @@ class MemoryManager:
             prompt = (
                 "You are tasked with summarizing recent AI agent memories into a master generic_memory.txt file.\n"
                 "Extract any permanent user preferences, facts, or important instructions from the recent memories and merge them into the master file.\n"
-                "Keep the master file concise, organized by category, and drop irrelevant daily details.\n"
+                "Keep the master file concise, organized by category, and drop irrelevant daily details. Ignore the [ID: xxx] markers in your summary.\n"
                 f"CURRENT MASTER GENERIC MEMORY:\n{generic_mem}\n\n"
                 f"RECENT MEMORIES:\n{yesterday_mem}\n{today_mem}\n\n"
                 "Output ONLY the new raw markdown for the generic_memory.txt file."

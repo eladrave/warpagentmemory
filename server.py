@@ -50,8 +50,8 @@ def add_memory(thingToRemember: str, token: str = None) -> str:
     try:
         if not token:
             token = os.getenv("TEST_TOKEN")
-        memory_manager.add_memory(token, thingToRemember)
-        return "Memory added successfully (queued for sync)."
+        mem_id = memory_manager.add_memory(token, thingToRemember)
+        return f"Memory [ID:{mem_id}] added successfully (queued for sync)."
     except Exception as e:
         return f"Error adding memory: {e}"
 
@@ -68,6 +68,60 @@ def search_memory(informationToGet: str, token: str = None) -> str:
         return results if results else "No relevant memories found."
     except Exception as e:
         return f"Error searching memory: {e}"
+
+@mcp.tool()
+def get_all_memories(token: str = None) -> str:
+    """
+    Retrieve the entire memory store for the user. 
+    Useful when you need a comprehensive overview of all past context or want to review everything.
+    """
+    try:
+        if not token:
+            token = os.getenv("TEST_TOKEN")
+        return memory_manager.get_all_memories(token)
+    except Exception as e:
+        return f"Error fetching memories: {e}"
+
+@mcp.tool()
+def get_memories_by_time(start_date: str, end_date: str, token: str = None) -> str:
+    """
+    Retrieve all memories logged between two dates.
+    Format for both start_date and end_date: YYYY-MM-DD
+    Example: 2026-04-10
+    """
+    try:
+        if not token:
+            token = os.getenv("TEST_TOKEN")
+        return memory_manager.get_memories_by_time(token, start_date, end_date)
+    except Exception as e:
+        return f"Error fetching memories by time: {e}"
+
+@mcp.tool()
+def delete_memory(memory_id: str, token: str = None) -> str:
+    """
+    Deletes a specific memory from the store.
+    You must provide the exact 8-character memory_id (e.g. "abc12345") found via search or get_all tools.
+    """
+    try:
+        if not token:
+            token = os.getenv("TEST_TOKEN")
+        return memory_manager.delete_memory(token, memory_id)
+    except Exception as e:
+        return f"Error deleting memory: {e}"
+
+@mcp.tool()
+def resync_memories(token: str = None) -> str:
+    """
+    Force a full re-sync of all local storage files to the Gemini RAG backend.
+    Useful if memories were manually edited or bulk imported to the user's volume.
+    """
+    try:
+        if not token:
+            token = os.getenv("TEST_TOKEN")
+        memory_manager.sync_force(token)
+        return "Sync forced successfully."
+    except Exception as e:
+        return f"Error syncing memory: {e}"
 
 @app.get("/")
 def root():

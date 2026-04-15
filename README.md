@@ -6,7 +6,8 @@ It replicates the `supermemory-mcp` functionality using your own Gemini context 
 This system is built from the ground up to solve the `421 Invalid Host Header` bugs common when running Starlette/FastMCP servers behind Google Cloud Load Balancers, by strictly wrapping FastMCP inside a standard FastAPI + Uvicorn deployment.
 
 ## Features
-- **MCP Server (SSE):** Plugs into any agent (like Warp or Claude Desktop) using the `mcp` SDK to expose `add_memory` and `search_memory` tools.
+- **MCP Server (SSE):** Plugs into any agent (like Warp or Claude Desktop) using the `mcp` SDK.
+- **Full CRUD Tools:** Exposes `add_memory`, `search_memory`, `get_all_memories`, `get_memories_by_time`, `delete_memory`, and `resync_memories`.
 - **Multi-User Sync:** Each user gets their own isolated memory instance via an API Token.
 - **Local / GCS Storage:** Keeps your memories organized by day (`memory_YYYY-MM-DD.txt`) and a synthesized `generic_memory.txt` on a mounted GCS volume, ensuring state is preserved across container restarts without databases.
 - **Gemini RAG Sync:** Automatically maintains a Gemini File Store containing your memories for high-speed, intelligent RAG retrieval.
@@ -48,6 +49,10 @@ Deploying the MCP Server is handled cleanly by the provided script. It will crea
 ## 🤖 Adding AgentMemory to your AI Agents
 
 Because AgentMemory is fully compliant with the Model Context Protocol (MCP), you can add it to any supported agentic software.
+
+### Important: Autonomous Memory Configuration
+In `skills/agentmemory/SKILL.md` we provide an out-of-the-box instruction set that forces your agent to **proactively save and retrieve** facts without you ever explicitly telling it to "remember" something. 
+Copy that `SKILL.md` into your agent's skills directory!
 
 ### Example 1: Warp Terminal 
 You can add AgentMemory as an MCP server in Warp by adding the deployed Cloud Run SSE URL to your configuration, or by running it locally using `stdio`.
